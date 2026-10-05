@@ -3,6 +3,8 @@ import requests
 import redis
 from storage import storage
 
+TTL_4_DAYS = 60 * 60 * 24 * 4
+
 
 def start(url, port):
     app = Flask(__name__)
@@ -10,11 +12,10 @@ def start(url, port):
     @app.route('/')
     @app.route('/<path:path>')
     def proxy(path=''):
-        cache_key = url
-        # cache_key = request.full_path
+        cache_key = url + request.full_path
         cached_data = storage.hgetall(cache_key)
         if cached_data:
-            print("Cache HIT")
+            print("Cache HIT", cache_key)
             raw_type = cached_data.get(b'content_type')
             raw = Response(cached_data[b'response.content'], status=200,
                            content_type=raw_type.decode())
@@ -24,7 +25,6 @@ def start(url, port):
         print("Cache MISS")
         try:
             response = requests.get(cache_key, timeout=5)
-            # response = requests.get(f"{url}/{path}", params=request.args, timeout=5)
         except requests.exceptions.Timeout:
             return jsonify({
                 "error": "The server took too long to respond.",
@@ -36,6 +36,10 @@ def start(url, port):
                 "status": 500
             }), 500
         print("UPSTREAM:", cache_key)
+        #!TEST
+        print("PATH:", request.full_path)
+        print("REQUEST.PATH:", request.path)
+        print("PATH ARG:", path)
 
         if response.ok:
             raw = Response(response=response.content, status=response.status_code,
@@ -43,12 +47,7 @@ def start(url, port):
             raw.headers['X-cache'] = 'MISS'
             storage.hset(cache_key, mapping={"response.content": response.content, "content_type": response.headers.get(
                 'Content-Type', 'application/json; charset=utf-8')})
-        # else:
-        #     return jsonify({
-        #                     "error": "Network error occured(2).",
-        #                     "status": response.status_code
-        #                 }), response.status_code
-
+            storage.expire(cache_key, TTL_4_DAYS)
         return raw
 
     app.run(port=port, debug=True)
